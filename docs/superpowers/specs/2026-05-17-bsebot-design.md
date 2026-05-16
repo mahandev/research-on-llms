@@ -304,6 +304,7 @@ bsebot tools approve <id>              # approve agent-requested source
 | `harvester_runs` | Status row per harvester invocation |
 | `llm_call_log` | Per-call: provider, model, tokens, finish_reason, cost |
 | `cash_ledger` | All cash movements (deposit, trade entry/exit, daily ₹10 overhead) |
+| `price_history` | Deterministic OHLCV time series (from yfinance) |
 
 WAL mode, foreign keys on, indexes on hot lookups.
 
@@ -384,6 +385,73 @@ The non-negotiable rules to prevent hallucination:
 - ML models trained on price data
 - Multi-user / shared deployment
 - Backtesting framework (live forward-test only)
+
+## Initial history bootstrap
+
+Without seed data the agent starts blind. A one-time `bsebot bootstrap` CLI command (run once during `setup.sh`) populates the DB with historical context:
+
+| Source | Range | Storage |
+|---|---|---|
+| `yfinance` price + volume history | last 5 years daily OHLCV for `BSE.NS` | `price_history` table (deterministic, no LLM extraction) |
+| Screener.in financials snapshot | current page: 10y annual P&L, 10q quarterly P&L, shareholding pattern, ratios | `raw_documents` + extracted to `facts` |
+| Screener.in announcements page | all visible announcements (typically last 6 months) | `raw_documents` + extracted |
+| SEBI circulars index | last 24 months of circulars (titles + dated, full text fetched lazily on-demand) | `raw_documents` (index only initially) |
+| NSE archives | last 6 months of announcements PDFs linked from screener.in | `raw_documents` + extracted |
+| Concall transcripts | last 4 quarters via screener.in concall links | `raw_documents` + extracted |
+| Google News | last 30 days RSS replay | `raw_documents` + extracted |
+
+After bootstrap, the agent's first scheduled run reads ~500–2000 facts as context — enough to write a meaningful first thesis. Bootstrap is idempotent (content_hash dedup), so re-running is safe.
+
+`price_history` table is separate from `facts`: deterministic OHLCV doesn't go through LLM extraction. Stored as `(date, open, high, low, close, volume)` rows. Available to the agent via a `get_price_history(date_from, date_to)` tool.
+
+## Custom URL handling for the agent
+
+When the agent needs information from a URL we don't have a dedicated harvester for, there are three paths depending on intent:
+
+### Path 1: One-off fetch (`fetch_url` tool)
+
+Agent calls `fetch_url(url)` during a run. Flow:
+1. URL is fetched (requests → httpx fallback → Playwright as last resort if `playwright` is enabled)
+2. Content stored as a `raw_document` with `source='agent_fetched'` and `metadata.fetched_by_agent_run=<id>`
+3. Extractor immediately processes it using a **generic_web schema** (see below) — runs synchronously since the agent is waiting
+4. Resulting facts are returned to the agent within the same run
+
+### Path 2: One-off search (`web_search` tool)
+
+Agent calls `web_search(query)`. Flow:
+1. Free search API used (recommended: **Brave Search API**, 2000 queries/month free; fallback DuckDuckGo via `duckduckgo-search` library, no key)
+2. Top 5 result URLs each fetched (Path 1 flow per result)
+3. Aggregated facts returned to agent
+
+### Path 3: New recurring source (`request_new_source` tool)
+
+Agent wants a URL added as a permanent harvester (e.g., "track this newly-discovered SEBI sub-page weekly"). Flow:
+1. Agent calls `request_new_source(name, description, url, fetch_method, expected_signal_type, rationale)`
+2. Row inserted in `tools` table with `enabled=0, approved_at=NULL, created_by='agent'`
+3. Vault writes a markdown file in `Sources/_Pending/` with the request
+4. User runs `bsebot tools approve <id>` after review
+5. If the URL matches an existing harvester pattern (e.g., SEBI, NSE, screener domain), an existing harvester is reused with a new config row; otherwise a **generic URL harvester** runs the fetch on a configurable cron (default daily) and routes content through the generic_web schema
+
+### The `generic_web` extraction schema
+
+When no source-specific schema applies, the extractor uses a looser schema that still enforces grounding:
+
+```python
+class GenericWebFact(BaseModel):
+    summary: str                              # 2-3 sentence summary
+    is_about_bse_ltd: bool                    # filter junk
+    event_type: Literal["earnings","regulatory","product","management","macro","sentiment","other"]
+    sentiment: float                          # -1.0 to 1.0
+    key_claims: list[ClaimWithQuote]          # each has text + source_quote (verbatim)
+    mentioned_entities: list[str]             # competitors, regulators, etc
+    confidence: float                         # 0.0 to 1.0, lowered for ambiguous content
+
+class ClaimWithQuote(BaseModel):
+    claim: str                                # what the source claims
+    source_quote: str                         # verbatim text from page (substring-verified)
+```
+
+Grounding rules still apply: every claim has a verbatim quote, quote is substring-checked, no numbers from LLM (deterministic parsers attempted first for any `<table>` content; if numbers found in narrative only, flagged `low_confidence`).
 
 ## Tech stack
 
