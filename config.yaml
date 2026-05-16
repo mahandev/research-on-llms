@@ -1,0 +1,27 @@
+# BSEBot configuration.
+# Models follow litellm naming. Env-var names below are looked up from .env.
+
+database:
+  path: data/bsebot.db
+
+llm:
+  extract_max_tokens: 2048
+  reason_max_tokens: 8192
+  continuation_max_attempts: 3
+  providers:
+    - name: gemini
+      model: gemini/gemini-2.5-flash
+      api_key_env: GEMINI_API_KEY
+      roles: [extract, reason]
+    - name: cerebras
+      model: cerebras/llama-3.3-70b
+      api_key_env: CEREBRAS_API_KEY
+      roles: [extract]
+    - name: groq
+      model: groq/llama-3.3-70b-versatile
+      api_key_env: GROQ_API_KEY
+      roles: [reason]
+    - name: github_models
+      model: github/gpt-4.1
+      api_key_env: GITHUB_MODELS_TOKEN
+      roles: [reason]

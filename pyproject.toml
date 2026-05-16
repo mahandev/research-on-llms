@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bsebot"
+version = "0.1.0"
+description = "Autonomous paper-trading bot for BSE Ltd"
+requires-python = ">=3.11"
+dependencies = [
+  "litellm>=1.50.0",
+  "instructor>=1.5.0",
+  "pydantic>=2.6",
+  "python-dotenv>=1.0.0",
+  "pyyaml>=6.0",
+  "click>=8.1",
+  "requests>=2.31",
+  "httpx>=0.27",
+  "beautifulsoup4>=4.12",
+  "lxml>=5.1",
+  "pdfplumber>=0.11",
+  "feedparser>=6.0",
+  "yfinance>=0.2.40",
+  "matplotlib>=3.8",
+  "python-frontmatter>=1.1",
+  "apscheduler>=3.10",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "pytest-mock>=3.12",
+]
+
+[project.scripts]
+bsebot = "bsebot.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["bsebot*"]
+exclude = ["tests*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
